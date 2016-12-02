@@ -7,12 +7,51 @@ import * as Errors from './errors';
 
 const SELECT_HIDDEN_FIELDS = '+services.password.bcrypt +services.password.oldPasswords';
 
+const checkUserLogin = (user, password, config) => {
+  if (!!user) {
+    return user.comparePassword(password)
+      .then((res) => {
+        // Check password
+        if (!res) {
+          if (!!throwError) throw new Errors.LOGIN_FAILED();
+          return false;
+        }
+
+        // Check if locked
+        if (!!user.locked) {
+          if (!!throwError) throw new Errors.ACCOUNT_LOCKED();
+          return false;
+        }
+
+        // Enforcing user verification only if configured
+        if (config.verifiedLogin === true && !user.isVerified) {
+          if (!!throwError) throw new Errors.LOGIN_FAILED_UNVERIFIED();
+          return false;
+        }
+        // Check password expiration date
+        if (!!config.expirePasswordDays && config.expirePasswordDays > 0) {
+          const expirationDate = moment().subtract(config.expirePasswordDays, 'd');
+          if (user.services.password.changeDate - expirationDate <= 0) {
+            if (!!throwError) throw new Errors.LOGIN_FAILED_PASSWORD_EXPIRED();
+            return false;
+          }
+        }
+
+        // Finally return the user
+        return user;
+      })
+  }
+  else {
+    if (!!throwError) throw new Errors.LOGIN_FAILED();
+    return false;
+  }
+};
+
 export default function (config) {
   return {
     getFull(query) {
       return this.findOne(query).select(SELECT_HIDDEN_FIELDS).execAsync();
     },
-
     /**
      * Login
      * Return the user if success, false if not
@@ -25,46 +64,13 @@ export default function (config) {
     login(username, password, throwError = false) {
       // Selecting password and emails (for getting the isVerified virtual)
       return this.findOne({username: username}).select(SELECT_HIDDEN_FIELDS).execAsync()
-        .then((user) => {
-          if (!!user) {
-            return user.comparePassword(password)
-              .then((res) => {
-                // Check password
-                if (!res) {
-                  if (!!throwError) throw new Errors.LOGIN_FAILED();
-                  return false;
-                }
-
-                // Check if locked
-                if (!!user.locked) {
-                  if (!!throwError) throw new Errors.ACCOUNT_LOCKED();
-                  return false;
-                }
-
-                // Enforcing user verification only if configured
-                if (config.verifiedLogin === true && !user.isVerified) {
-                  if (!!throwError) throw new Errors.LOGIN_FAILED_UNVERIFIED();
-                  return false;
-                }
-                
-                // Check password expiration date
-                if (!!config.expirePasswordDays && config.expirePasswordDays > 0) {
-                  const expirationDate = moment().subtract(config.expirePasswordDays, 'd');
-                  if (user.services.password.changeDate - expirationDate <= 0) {
-                    if (!!throwError) throw new Errors.LOGIN_FAILED_PASSWORD_EXPIRED();
-                    return false;
-                  }
-                }
-
-                // Finally return the user
-                return user;
-              })
-          }
-          else {
-            if (!!throwError) throw new Errors.LOGIN_FAILED();
-            return false;
-          }
-        });
+        .then(user => checkUserLogin(user, password, config));
+    },
+    loginWithEmail(email, password, throwError = false) {
+      //Finding user via email address
+      // TODO: Add login to only allow primary or validated email address for login
+      return this.findOne({emails: {$elemMatch: {address: email}}})
+        .then(user => checkUserLogin(user, password, config));
     },
   }
 };
